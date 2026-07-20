@@ -15,8 +15,9 @@ import unittest
 from pathlib import Path
 
 # Ensure the project root is on sys.path so we can import transtiq.py
-_THIS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_THIS_DIR))
+_THIS_DIR = Path(__file__).resolve().parent          # tests/
+_PROJECT_ROOT = _THIS_DIR.parent                     # project root
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 # Import everything we need to test
 from transtiq import (

@@ -30,7 +30,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from llama_cpp import Llama 
+# Import moved inside functions that use it (to allow CI tests without the package) 
 
 # ---------------------------------------------------------------------------
 # Default configuration  (edit these for your setup)
@@ -452,6 +452,7 @@ def main():
         print(f'    Tokenizer override: {args.tokenizer_override}')
     print()
 
+    from llama_cpp import Llama
     kv = {'tokenizer.ggml.pre': args.tokenizer_override} if args.tokenizer_override else None
     model = Llama(
         model_path=model_path, n_ctx=args.n_ctx, n_threads=args.n_cores,
