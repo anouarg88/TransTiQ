@@ -165,7 +165,7 @@ def restore_symbols(text: str, mapping: dict) -> str:
     text = re.sub(r'(\)@)(\w)', r'\1 \2', text)
     text = re.sub(r'(\w)(\(\()', r'\1 \2', text)
     text = re.sub(r'(\)\))(\w)', r'\1 \2', text)
-    text = re.sub(r'(\w)(\()(?=[^)\s])', r'\1 \2', text)
+    text = re.sub(r'(\w)(\()(?![\d.)])', r'\1 \2', text)
     text = re.sub(r'(\))(\w)', r'\1 \2', text)
 
     # Build a set of known label names from PROTECTED_PATTERNS
@@ -190,9 +190,20 @@ def restore_symbols(text: str, mapping: dict) -> str:
 
     # Strip leading/trailing spaces inside listener signals //...//
     # (e.g. //Mhm // → //Mhm//, // Nun // → //Nun//)
-    def _tighten_signal(m):
-        return '//' + m.group(1).strip() + '//'
-    text = re.sub(r'//\s*(.*?)\s*//', _tighten_signal, text)
+    def _tighten_double(m):
+        delim = m.group(1)
+        return delim + m.group(2).strip() + delim
+    text = re.sub(r'(//)\s*(.*?)\s*//', _tighten_double, text)
+
+    # Also strip spaces inside laughter wrappers @( ... )@
+    # (e.g. @( Haha )@ → @(Haha)@)
+    text = re.sub(r'@\(\s*(.*?)\s*\)@', lambda m: '@(' + m.group(1).strip() + ')@', text)
+
+    # Remove common hallucinated placeholder patterns like ((___)), (___),
+    # and //___// (model hallucinates triple-underscore inside wrappers)
+    text = re.sub(r'\(\(_{3,}\)\)', '', text)
+    text = re.sub(r'\(_{3,}\)', '', text)
+    text = re.sub(r'//_{3,}//', '', text)
 
     return text
 
@@ -242,14 +253,17 @@ def make_prompt(lines: list[str], src: str, tgt: str,
         )
 
     system = (
+        f"### Instruction:\n"
         f"You are a professional translator for research interview transcripts.\n"
-        f"The interview tone is friendly and informal.\n"
+        f"The interview tone is formal and polite.\n" #alternative: friendly and informal
         f"Pay close attention to speaker labels (e.g. 'A:', 'B:') — "
         f"keep speaker identity consistent and use appropriate pronouns "
         f"for each speaker (e.g. A asks questions, B answers them).\n"
-        f"Pay special attention to speaker turns (e.g. everything said by A or B at one time) — "
-        f"split sentences across lines inside of speaker turns matching the original transcript as closely as possible.\n"
-        f"Translate each {src_name} line to {tgt_name}."
+        f"Pay special attention to speaker turns.\n"
+        f"Translate each {src_name} line to {tgt_name}. "
+        f"DO NOT output any {src_name} text. If unsure, "
+        f"still translate to {tgt_name} as best as you can.\n"
+        f"Do not leave lines untranslated.\n"
         f"Preserve __PAUSE_0__, __DEG_1__ etc. as-is.\n"
         f"Also preserve these transcription markers and TRANSLATE their content:\n"
         f"  @(___)@  → translate inside, keep @( and )@\n"
@@ -258,10 +272,11 @@ def make_prompt(lines: list[str], src: str, tgt: str,
         f"  (___)    → translate inside, keep ( and )\n"
         f"Keep any / (slash) markers for restarts/cut-offs.\n"
         f"Output {len(lines)} lines, one per input line. No extra text.\n"
+        f"### Transcript:\n"
         f"{ctx_block}"
         f"\n" +
         '\n'.join(content_lines) +
-        f'\n\nTranslation to {tgt_name}:'
+        f"\n\n### Translation to {tgt_name}:\n"
     )
     return system, bodies, prefixes, suffixes, mappings
 
@@ -304,19 +319,37 @@ def parse_output(text: str, expected: int) -> list[str]:
 def translate_lines(model, lines: list[str], batch_size: int,
                     src: str, tgt: str,
                     context_window: int = 0) -> list[str]:
-    """Translate lines in batches with optional sliding-window context."""
+    """Translate lines in batches with optional sliding-window context.
+
+    Lines with empty translatable bodies (e.g. timestamp-only lines) are
+    passed through unchanged — they are excluded from the model prompt to
+    prevent line-count misalignment that causes cascading untranslated
+    segments in subsequent batches.
+    """
     results = []
     for start in range(0, len(lines), batch_size):
         batch = lines[start:start + batch_size]
+
+        # Parse all lines and identify which have translatable content
+        parsed = [parse_line(line) for line in batch]
+        translatable = [
+            i for i, (p, b, s) in enumerate(parsed) if b.strip()
+        ]
+
+        if not translatable:
+            # Nothing to translate — pass through unchanged
+            for p, b, s in parsed:
+                results.append(p + b + s)
+            continue
+
+        # Build sub-batch containing only translatable lines
+        translatable_lines = [batch[i] for i in translatable]
+
         # Pass last N already-translated lines as context (with speaker labels)
         ctx = (results[-context_window:] if context_window and results else None)
-        prompt, bodies, prefixes, suffixes, mappings = make_prompt(
-            batch, src, tgt, context_lines=ctx)
 
-        if not any(b.strip() for b in bodies):
-            for i in range(len(batch)):
-                results.append(prefixes[i] + bodies[i] + suffixes[i])
-            continue
+        prompt, bodies, prefixes, suffixes, mappings = make_prompt(
+            translatable_lines, src, tgt, context_lines=ctx)
 
         try:
             output = model.create_completion(
@@ -328,14 +361,20 @@ def translate_lines(model, lines: list[str], batch_size: int,
             print(f'  [WARN]  Chunk error: {e}', file=sys.stderr)
             raw = ''
 
-        translated = parse_output(raw, len(batch))
+        translated = parse_output(raw, len(translatable_lines))
 
-        for i in range(len(batch)):
-            body = translated[i] if i < len(translated) else ''
-            body = restore_symbols(body, mappings[i])
-            if not body:
-                body = bodies[i]
-            results.append(prefixes[i] + body + suffixes[i])
+        # Reassemble in original order, keeping empty-body lines as-is
+        ti = 0
+        for i, (p, b, s) in enumerate(parsed):
+            if i in translatable:
+                body = translated[ti] if ti < len(translated) else ''
+                body = restore_symbols(body, mappings[ti])
+                if not body:
+                    body = b  # fallback to original body if model gave nothing
+                ti += 1
+            else:
+                body = b  # empty body — pass through unchanged
+            results.append(p + body + s)
 
     return results
 
@@ -373,10 +412,10 @@ def main():
                         help='Source language (default: zh)')
     parser.add_argument('--to', dest='tgt', default='de',
                         help='Target language (default: de)')
-    parser.add_argument('--batch-size', type=int, default=13)
-    parser.add_argument('--context-window', type=int, default=7,
+    parser.add_argument('--batch-size', type=int, default=10)
+    parser.add_argument('--context-window', type=int, default=5,
                         help='Number of previously translated lines to keep '
-                             'as context (default: 7, 0 to disable)')
+                             'as context (default: 5, 0 to disable)')
     parser.add_argument('--n-ctx', type=int, default=4096)
     parser.add_argument('--no-gpu', action='store_true')
     parser.add_argument('--n-cores', type=int, default=6)

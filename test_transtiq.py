@@ -382,6 +382,19 @@ class TestRestoreSpacing(unittest.TestCase):
         """// Nun // → //Nun// (spaces on both sides)."""
         result = self._apply_restore('// Nun //')
         self.assertIn('//Nun//', result)
+
+    # --- laughter wrapper internal spacing ---
+
+    def test_laughter_spaces_inside_stripped(self):
+        """@( Haha )@ → @(Haha)@ (spaces inside stripped)."""
+        result = self._apply_restore('@( Haha )@')
+        self.assertIn('@(Haha)@', result)
+
+    def test_laughter_spaces_multiple_words(self):
+        """@( Echt nicht gedacht )@ → @(Echt nicht gedacht)@."""
+        result = self._apply_restore('@( Echt nicht gedacht )@')
+        self.assertIn('@(Echt nicht gedacht)@', result)
+
     # --- degree cleanup ---
 
     def test_degree_cleanup(self):
@@ -452,6 +465,8 @@ class TestPlaceholderCleanup(unittest.TestCase):
         result = restore_symbols('PAUSE_2__ich hatte', mapping)
         self.assertNotIn('PAUSE_2__', result)
         self.assertIn('ich', result)
+
+
 # ===========================================================================
 # 6.  PROMPT CONSTRUCTION
 # ===========================================================================
@@ -696,13 +711,12 @@ class TestEdgeCases(unittest.TestCase):
         restored = restore_symbols(prot, mapping)
         self.assertIn('(                                    )', restored)
 
-    def test_slash_with_spaces(self):
-        """Slash between words is protected and content visible."""
-        prot, mapping = protect_symbols('就是/就是')
-        self.assertIn('__CUTOFF_', prot)
-        self.assertIn('就是', prot)
+    def test_uncertain_with_leading_word(self):
+        """gibt es(       ) → gibt es (       ) — space before uncertain bracket."""
+        text = 'gibt es(       )'
+        prot, mapping = protect_symbols(text)
         restored = restore_symbols(prot, mapping)
-        self.assertIn('/', restored)
+        self.assertIn('es (', restored)
 
     def test_cjk_with_all_symbols(self):
         """CJK text with all new symbol types mixed."""
