@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────
+# Transtiq – .gitignore
+# ─────────────────────────────────────────────────────
+
+# GGUF model files are too large for Git (download from HuggingFace instead)
+models/*.gguf
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs (regenerated on each run)
+*_tiQ_*.txt
+
+# Refact agent workspace
+.refact/
