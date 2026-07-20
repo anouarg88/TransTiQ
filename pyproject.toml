@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transtiq"
+version = "0.1.0"
+description = "Offline interview transcript translator using local GGUF models"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+transtiq = "transtiq:main"
